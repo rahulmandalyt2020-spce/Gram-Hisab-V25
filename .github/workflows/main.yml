@@ -3,11 +3,10 @@ name: Gram Hisab V25 APK Build
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
-      - "**.zip"
-      - ".github/workflows/main.yml"
+      - '**.zip'
+      - '.github/workflows/main.yml'
 
 permissions:
   contents: read
@@ -15,74 +14,88 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          accept-android-sdk-licenses: true
-
-      - name: Find and extract Android project ZIP
+      - name: Locate and extract Gram Hisab Android project
         shell: bash
         run: |
           set -euo pipefail
-
-          ZIP_FILE=$(find . -maxdepth 3 -type f -name "*.zip" \
-            -not -path "./.git/*" | head -n 1)
-
+          ZIP_FILE="$(find . -maxdepth 3 -type f -name 'Gram_Hisab_V25_Android_Project.zip' -not -path './.git/*' | head -n 1)"
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Android project ZIP not found."
+            ZIP_FILE="$(find . -maxdepth 3 -type f -name '*.zip' -not -path './.git/*' | head -n 1)"
+          fi
+          if [ -z "$ZIP_FILE" ]; then
+            echo 'ERROR: Android project ZIP not found in repository root.'
             exit 1
           fi
+          mkdir -p "$RUNNER_TEMP/gram-hisab-project"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/gram-hisab-project"
+          SETTINGS_FILE="$(find "$RUNNER_TEMP/gram-hisab-project" -type f \( -name settings.gradle -o -name settings.gradle.kts \) | head -n 1)"
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo 'ERROR: settings.gradle not found inside ZIP.'
+            exit 1
+          fi
+          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project directory: $PROJECT_DIR"
+          test -f "$PROJECT_DIR/app/build.gradle"
+          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
 
-          mkdir -p android-project
-          unzip -q "$ZIP_FILE" -d android-project
-
-          echo "Extracted files:"
-          find android-project -maxdepth 4 -type f | head -n 100
-
-      - name: Locate Gradle project
+      - name: Install Android SDK packages
         shell: bash
         run: |
           set -euo pipefail
-
-          SETTINGS_FILE=$(find android-project -type f \
-            \( -name settings.gradle -o -name settings.gradle.kts \) \
-            | head -n 1)
-
-          if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: settings.gradle not found."
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          if [ ! -d "$SDK_ROOT" ]; then
+            echo "ERROR: Android SDK directory not found: $SDK_ROOT"
             exit 1
           fi
-
-          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-          if [ ! -f "$PROJECT_DIR/gradlew" ]; then
-            echo "ERROR: Gradle wrapper (gradlew) not found."
-            echo "The project ZIP must include gradlew and gradle/wrapper files."
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -n 1 || true)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found under $SDK_ROOT/cmdline-tools"
+            find "$SDK_ROOT" -maxdepth 4 -type f -name sdkmanager 2>/dev/null | head -n 20 || true
             exit 1
           fi
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
 
-          chmod +x "$PROJECT_DIR/gradlew"
+      - name: Install Gradle 8.9
+        shell: bash
+        run: |
+          set -euo pipefail
+          GRADLE_DIR="$RUNNER_TEMP/gradle-8.9"
+          curl --fail --location --retry 3 --retry-delay 2 'https://services.gradle.org/distributions/gradle-8.9-bin.zip' -o "$RUNNER_TEMP/gradle-8.9-bin.zip"
+          unzip -q "$RUNNER_TEMP/gradle-8.9-bin.zip" -d "$RUNNER_TEMP"
+          echo "$GRADLE_DIR/bin" >> "$GITHUB_PATH"
+          "$GRADLE_DIR/bin/gradle" --version
 
       - name: Build Debug APK
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: ./gradlew --no-daemon --stacktrace :app:assembleDebug
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          gradle --no-daemon --stacktrace :app:assembleDebug
+          APK="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
+          echo "APK built successfully: $APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Gram-Hisab-V25-debug-APK
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+          
