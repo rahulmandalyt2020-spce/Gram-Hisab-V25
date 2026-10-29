@@ -1,0 +1,34 @@
+name: Gram Hisab V25 APK Build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '**.zip'
+      - '.github/workflows/main.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find and extract Android project ZIP
+        run: |
+          ZIP_FILE=$(find . -maxdepth 2 -type f -name '*.zip' | head -n 1)
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: Android project ZIP not found."
+            exit 1
+          fi
+          mkdir -p android-project
+          unzip -q "$ZIP_FILE" -d android-project
+          echo "Extracted project files:"
+          find android-project -maxdepth 3 -type f | head -n 80
+
+      - name: Check Gradle project
+        run: |
+          echo "Searching for Gradle build files..."
+          find android-project -type f \( -name 'gradlew' -o -name 'settings.gradle' -o -name 'settings.gradle.kts' -o -name 'build.gradle' -o -name 'build.gradle.kts' \)
+          echo "This workflow checks the project structure before building."
